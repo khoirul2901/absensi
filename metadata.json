@@ -1,0 +1,10 @@
+{
+  "name": "SIAS - Sistem Informasi Absensi Sekolah",
+  "description": "Sistem Informasi Absensi Sekolah modern, cepat, simpel, dan responsif dengan integrasi QR Code, Hardware Scanner, Auto Kiosk, Presensi Mengajar Guru, dan Rekapitulasi Otomatis.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
