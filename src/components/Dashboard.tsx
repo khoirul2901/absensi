@@ -47,7 +47,7 @@ import {
   Legend
 } from "recharts";
 import { toPng } from "html-to-image";
-import { callGas, getStorageKey, extractArrayData, getStorage, isInvalidWali } from "../lib/gasApi";
+import { callGas, callMock, getStorageKey, extractArrayData, getStorage, isInvalidWali } from "../lib/gasApi";
 import { DashboardMetrics, AutoAlfaResult } from "../types";
 import { IdCard } from "./IdCard";
 
@@ -204,25 +204,45 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    // 1. Instant Cache Render (Stale-While-Revalidate): render immediately from local cache so UI appears in 0ms
+    try {
+      const cached = callMock("getDashboardMetrics", []);
+      if (cached && cached.success && cached.data) {
+        setMetrics(cached.data);
+        setLoading(false);
+      }
+    } catch (e) {}
+
     async function loadMetrics() {
       try {
-        setLoading(true);
-        // Run auto-alfa check upon dashboard load
-        try {
-          const autoRes = await callGas("jalankanAutoAlfaSistem", [undefined, false]);
+        // Run auto-alfa check non-blockingly
+        callGas("jalankanAutoAlfaSistem", [undefined, false]).then((autoRes) => {
           if (autoRes && autoRes.success && autoRes.data) {
             setAutoAlfaInfo(autoRes.data);
           }
-        } catch (e) {}
+        }).catch(() => {});
 
         const res = await callGas("getDashboardMetrics");
-        if (res && res.success) {
+        if (res && res.success && res.data) {
           setMetrics(res.data);
-        } else {
-          setError(res?.message || "Gagal memuat metrik dashboard");
+          setError(null);
+        } else if (!metrics) {
+          const fallback = callMock("getDashboardMetrics", []);
+          if (fallback && fallback.success) {
+            setMetrics(fallback.data);
+          } else {
+            setError(res?.message || "Gagal memuat metrik dashboard");
+          }
         }
       } catch (err: any) {
-        setError(err.toString());
+        if (!metrics) {
+          const fallback = callMock("getDashboardMetrics", []);
+          if (fallback && fallback.success) {
+            setMetrics(fallback.data);
+          } else {
+            setError(err.toString());
+          }
+        }
       } finally {
         setLoading(false);
       }
@@ -239,9 +259,22 @@ export default function Dashboard() {
 
   // Fetch Master Data Siswa, Kelas & Guru for student distribution breakdown
   useEffect(() => {
+    // Instant cache population for breakdown cards
+    const localS = getStorage("data_siswa") || [];
+    const localK = getStorage("data_kelas") || [];
+    const localG = getStorage("data_guru") || [];
+    if (localS.length > 0 || localK.length > 0 || localG.length > 0) {
+      setSiswaMasterList(localS);
+      setKelasMasterList(localK);
+      setGuruMasterList(localG);
+      setLoadingBreakdown(false);
+    }
+
     async function loadMasterBreakdown() {
       try {
-        setLoadingBreakdown(true);
+        if (localS.length === 0 && localK.length === 0) {
+          setLoadingBreakdown(true);
+        }
         const [resSiswa, resKelas, resGuru] = await Promise.all([
           callGas("getDataMaster", ["Siswa"]),
           callGas("getKelasSemua"),

@@ -2993,7 +2993,12 @@ export async function callGas(action: string, args: any[] = []): Promise<any> {
   const url = getGasUrl();
   const token = getGasToken();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  // Allow up to 35 seconds for Google Apps Script cold starts and heavy spreadsheet operations
+  const timeoutId = setTimeout(() => {
+    try {
+      controller.abort();
+    } catch (e) {}
+  }, 35000);
 
   try {
     const bodyObj: any = { action, args, token };
@@ -3212,10 +3217,19 @@ export async function callGas(action: string, args: any[] = []): Promise<any> {
     clearTimeout(timeoutId);
     
     if (!response.ok) {
-      throw new Error(`HTTP Error: ${response.status} ${response.statusText}`);
+      console.warn(`GAS HTTP Status: ${response.status} ${response.statusText}, beralih ke cache lokal.`);
+      return callMock(action, args);
     }
     
-    const rawResult = await response.json();
+    const responseText = await response.text();
+    let rawResult: any;
+    try {
+      rawResult = JSON.parse(responseText);
+    } catch (parseErr) {
+      console.warn("GAS Web App returned non-JSON format (kemungkinan butuh otorisasi akun / deployment ulang):", responseText.slice(0, 150));
+      return callMock(action, args);
+    }
+
     const result = sanitizeTimeFields(rawResult);
 
     if (result && result.success === false && result.message && (
@@ -3352,7 +3366,11 @@ export async function callGas(action: string, args: any[] = []): Promise<any> {
     return result;
   } catch (err: any) {
     clearTimeout(timeoutId);
-    console.error("GAS API Call error/timeout, falling back to local simulation:", err);
+    if (err?.name === "AbortError" || String(err).includes("abort")) {
+      console.warn(`GAS API timeout untuk action '${action}', memuat data dari cache lokal (offline fallback).`);
+    } else {
+      console.warn(`GAS API network issue untuk action '${action}':`, err?.message || err, "— Menggunakan cache database lokal.");
+    }
     return callMock(action, args);
   }
 }
