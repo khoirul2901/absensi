@@ -24,7 +24,8 @@ import {
   Eye,
   Loader2,
   RotateCcw,
-  SlidersHorizontal
+  SlidersHorizontal,
+  ExternalLink
 } from "lucide-react";
 import { callGas, callMock, getStorageKey, setStorage, getStorage, extractArrayData } from "../lib/gasApi";
 import { ScheduleLessonItem, JamPelajaranItem, AbsensiMengajarItem, TeacherItem } from "../types";
@@ -57,7 +58,7 @@ const DEFAULT_MAPEL_LIST = [
 ];
 
 export default function JadwalGuru({ session }: { session?: any }) {
-  const [activeTab, setActiveTab] = useState<"jadwal_pelajaran" | "absensi_mengajar" | "pengaturan_jam" | "jadwal_khusus">("jadwal_pelajaran");
+  const [activeTab, setActiveTab] = useState<"jadwal_pelajaran" | "absensi_mengajar" | "jadwal_khusus">("jadwal_pelajaran");
 
   // User session & role check
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -91,8 +92,6 @@ export default function JadwalGuru({ session }: { session?: any }) {
   const [toleransiAwal, setToleransiAwal] = useState<number>(15);
   const [toleransiAkhir, setToleransiAkhir] = useState<number>(30);
   const [toleransiGuru, setToleransiGuru] = useState<number>(15);
-  const [toleransiGuruInput, setToleransiGuruInput] = useState<number>(15);
-  const [savingToleransi, setSavingToleransi] = useState<boolean>(false);
 
   const [loading, setLoading] = useState(true);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
@@ -122,17 +121,6 @@ export default function JadwalGuru({ session }: { session?: any }) {
     mapel: "Matematika",
     id_guru: "",
     ruangan: "Kelas Utama"
-  });
-
-  // Modal: Add/Edit Jam Slot
-  const [showJamModal, setShowJamModal] = useState(false);
-  const [editJamId, setEditJamId] = useState<string | null>(null);
-  const [jamForm, setJamForm] = useState({
-    jam_ke: 1,
-    nama_jam: "Jam ke-1",
-    jam_mulai: "07:00",
-    jam_selesai: "07:45",
-    tipe: "Pelajaran" as "Pelajaran" | "Istirahat" | "Upacara"
   });
 
   // Modal: Teacher Class Attendance Form
@@ -244,7 +232,6 @@ export default function JadwalGuru({ session }: { session?: any }) {
           const val = Number(cfg.toleransi_guru ?? cfg.toleransi_mengajar_guru);
           if (!isNaN(val) && val >= 0) {
             setToleransiGuru(val);
-            setToleransiGuruInput(val);
           }
         }
       } catch (e) {}
@@ -252,50 +239,6 @@ export default function JadwalGuru({ session }: { session?: any }) {
       setError("Gagal memuat data: " + err.toString());
     } finally {
       setLoading(false);
-    }
-  };
-
-  // Save Teacher Attendance Settings & Restrictions
-  const handleSaveToleransi = async (e: FormEvent) => {
-    e.preventDefault();
-    setSavingToleransi(true);
-    setLoadingAction("Sedang menyimpan pengaturan toleransi & pembatasan jam...");
-    try {
-      const resCfg = await callGas("getPengaturanSemua");
-      let currentCfg = resCfg?.data || resCfg || {};
-      if (typeof currentCfg !== "object" || Array.isArray(currentCfg)) {
-        currentCfg = {};
-      }
-      const valNum = Math.max(0, Number(toleransiGuruInput));
-      const valAwal = Math.max(0, Number(toleransiAwal));
-      const valAkhir = Math.max(0, Number(toleransiAkhir));
-
-      const updated = {
-        ...currentCfg,
-        batasi_jam_jadwal: batasiJamJadwal,
-        toleransi_awal_menit: valAwal,
-        toleransi_akhir_menit: valAkhir,
-        toleransi_guru: valNum,
-        toleransi_mengajar_guru: valNum
-      };
-      await callGas("simpanPengaturanCustom", [updated]);
-      setToleransiGuru(valNum);
-
-      const savedLocal = localStorage.getItem(getStorageKey("MOCK_pengaturan_jam"));
-      const parsedLocal = savedLocal ? JSON.parse(savedLocal) : {};
-      parsedLocal.batasi_jam_jadwal = batasiJamJadwal;
-      parsedLocal.toleransi_awal_menit = valAwal;
-      parsedLocal.toleransi_akhir_menit = valAkhir;
-      parsedLocal.toleransi_guru = valNum;
-      parsedLocal.toleransi_mengajar_guru = valNum;
-      localStorage.setItem(getStorageKey("MOCK_pengaturan_jam"), JSON.stringify(parsedLocal));
-
-      alert(`Pengaturan & pembatasan jam presensi mengajar guru berhasil disimpan!\n• Status Pembatasan Jam: ${batasiJamJadwal ? "AKTIF" : "NONAKTIF"}\n• Toleransi Sebelum Jam Mulai: ${valAwal} Menit\n• Toleransi Setelah Jam Selesai: ${valAkhir} Menit\n• Toleransi Terlambat: ${valNum} Menit`);
-    } catch (err: any) {
-      alert("Gagal menyimpan pengaturan: " + err.toString());
-    } finally {
-      setSavingToleransi(false);
-      setLoadingAction(null);
     }
   };
 
@@ -430,65 +373,6 @@ export default function JadwalGuru({ session }: { session?: any }) {
         }
       } catch (err: any) {
         alert("Kesalahan: " + err.toString());
-      }
-    }
-  };
-
-  // Save Jam Pelajaran Slot
-  const handleSaveJamSlot = async (e: FormEvent) => {
-    e.preventDefault();
-    const payload = {
-      id_jam: editJamId || `JP-${Date.now()}`,
-      jam_ke: Number(jamForm.jam_ke),
-      nama_jam: jamForm.nama_jam || `Jam ke-${jamForm.jam_ke}`,
-      jam_mulai: jamForm.jam_mulai,
-      jam_selesai: jamForm.jam_selesai,
-      tipe: jamForm.tipe
-    };
-
-    try {
-      setLoading(true);
-      let res = await callGas("simpanJamPelajaran", [payload]);
-      
-      if (!res || res.success === false) {
-        if (editJamId) {
-          res = await callGas("editJamPelajaran", [editJamId, payload]);
-        } else {
-          res = await callGas("tambahJamPelajaran", [payload]);
-        }
-      }
-
-      // If remote GAS still fails or action not recognized, run local fallback so user action is never blocked
-      if (!res || res.success === false) {
-        res = callMock("simpanJamPelajaran", [payload]);
-      }
-
-      setShowJamModal(false);
-      alert(res?.message || "Slot jam pelajaran berhasil disimpan!");
-      fetchAllData();
-    } catch (err: any) {
-      const res = callMock("simpanJamPelajaran", [payload]);
-      setShowJamModal(false);
-      alert(res?.message || "Slot jam pelajaran berhasil disimpan!");
-      fetchAllData();
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDeleteJamSlot = async (idJam: string, namaJam: string) => {
-    if (confirm(`Hapus slot ${namaJam}?`)) {
-      try {
-        let res = await callGas("hapusJamPelajaran", [idJam]);
-        if (!res || res.success === false) {
-          res = callMock("hapusJamPelajaran", [idJam]);
-        }
-        alert(res?.message || "Slot jam pelajaran berhasil dihapus.");
-        fetchAllData();
-      } catch (err: any) {
-        const res = callMock("hapusJamPelajaran", [idJam]);
-        alert(res?.message || "Slot jam pelajaran berhasil dihapus.");
-        fetchAllData();
       }
     }
   };
@@ -850,18 +734,6 @@ export default function JadwalGuru({ session }: { session?: any }) {
             </button>
 
             <button
-              onClick={() => setActiveTab("pengaturan_jam")}
-              className={`pb-3 px-4 text-xs font-bold border-b-2 whitespace-nowrap transition-all flex items-center gap-2 ${
-                activeTab === "pengaturan_jam"
-                  ? "border-amber-600 text-amber-700 bg-amber-50/50 rounded-t-xl"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              <Clock className="w-4 h-4" />
-              Pengaturan Jam Pelajaran ({jamSlots.length} Slot)
-            </button>
-
-            <button
               onClick={() => setActiveTab("jadwal_khusus")}
               className={`pb-3 px-4 text-xs font-bold border-b-2 whitespace-nowrap transition-all flex items-center gap-2 ${
                 activeTab === "jadwal_khusus"
@@ -872,6 +744,20 @@ export default function JadwalGuru({ session }: { session?: any }) {
               <Users className="w-4 h-4" />
               Jadwal Fleksibel Guru (Khusus)
             </button>
+
+            <a
+              href="#/settings"
+              onClick={(e) => {
+                e.preventDefault();
+                window.location.hash = "#/settings";
+              }}
+              className="pb-3 px-4 text-xs font-bold border-b-2 border-transparent text-gray-500 hover:text-amber-700 hover:border-amber-300 whitespace-nowrap transition-all flex items-center gap-1.5 ml-auto"
+              title="Pengaturan slot jam pelajaran sekolah kini dikelola di Menu Pengaturan"
+            >
+              <Clock className="w-4 h-4 text-amber-600" />
+              <span>Pengaturan Jam ({jamSlots.length} Slot)</span>
+              <ExternalLink className="w-3.5 h-3.5 opacity-60" />
+            </a>
           </>
         )}
       </div>
@@ -1269,224 +1155,6 @@ export default function JadwalGuru({ session }: { session?: any }) {
                 </div>
               );
             })()}
-          </div>
-        </div>
-      )}
-
-      {/* TAB 3: PENGATURAN JAM PELAJARAN */}
-      {activeTab === "pengaturan_jam" && (
-        <div className="space-y-6">
-          {/* Feature Highlight: Multi-Jam Block Support */}
-          <div className="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-600 rounded-2xl p-5 text-white shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <span className="bg-white/20 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                ⚡ Fitur Efisiensi Absensi Mengajar
-              </span>
-              <h4 className="font-extrabold text-base">Pengaturan Jam untuk 2, 3, hingga 4 Jam Pelajaran Langsung (Blok Multi-Jam)</h4>
-              <p className="text-xs text-amber-100 max-w-2xl">
-                Guru yang mengampu 2 hingga 4 jam pelajaran berturut-turut pada mata pelajaran yang sama <strong>cukup melakukan 1x scan QR Code</strong>. Sistem secara otomatis mencatat presensi mengajar untuk seluruh sesi jam di blok tersebut.
-              </p>
-            </div>
-            <div className="bg-white/10 backdrop-blur-md p-3 rounded-xl border border-white/20 text-xs shrink-0 font-medium space-y-1">
-              <div className="font-extrabold text-amber-200 text-[11px]">Contoh Penggabungan Blok:</div>
-              <div>• <strong>2 Jam:</strong> Jam 1 s/d 2 (07:00 - 08:30)</div>
-              <div>• <strong>3 Jam:</strong> Jam 1 s/d 3 (07:00 - 09:15)</div>
-              <div>• <strong>4 Jam:</strong> Jam 1 s/d 4 (07:00 - 10:00)</div>
-            </div>
-          </div>
-
-          {/* PEMBATASAN DAN TOLERANSI WAKTU PRESENSI GURU FORM */}
-          <form onSubmit={handleSaveToleransi} className="bg-white rounded-2xl border border-amber-200/80 shadow-sm p-6 space-y-6">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-gray-100">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Clock className="w-5 h-5 text-amber-600" />
-                  <h3 className="font-extrabold text-gray-900 text-sm">
-                    Aturan & Pembatasan Jam Presensi Mengajar Guru
-                  </h3>
-                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border ${
-                    batasiJamJadwal 
-                      ? "bg-emerald-100 text-emerald-900 border-emerald-300" 
-                      : "bg-amber-100 text-amber-900 border-amber-300"
-                  }`}>
-                    {batasiJamJadwal ? "PEMBATASAN JAM AKTIF" : "PEMBATASAN BEBAS (NONAKTIF)"}
-                  </span>
-                </div>
-                <p className="text-xs text-gray-500 font-medium mt-1 max-w-2xl">
-                  Konfigurasi pembatasan waktu agar guru <strong>tidak dapat melakukan presensi mengajar di luar jam jadwal pelajaran</strong> yang telah ditentukan.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-3 bg-amber-50/70 border border-amber-200/80 rounded-xl px-4 py-2.5">
-                <span className="text-xs font-extrabold text-amber-950">Batasi Presensi Pada Jam Jadwal:</span>
-                <button
-                  type="button"
-                  onClick={() => setBatasiJamJadwal(!batasiJamJadwal)}
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    batasiJamJadwal ? "bg-amber-600" : "bg-gray-300"
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      batasiJamJadwal ? "translate-x-5" : "translate-x-0"
-                    }`}
-                  />
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Toleransi Awal */}
-              <div className="bg-gray-50/80 rounded-xl p-4 border border-gray-200/80 space-y-2">
-                <label className="text-xs font-bold text-gray-800 block">
-                  Buka Absen Sebelum Jam Mulai:
-                </label>
-                <div className="flex items-center gap-2 bg-white border border-gray-300 rounded-lg px-3 py-2 focus-within:border-amber-500">
-                  <input
-                    type="number"
-                    min="0"
-                    max="120"
-                    value={toleransiAwal}
-                    onChange={(e) => setToleransiAwal(Math.max(0, Number(e.target.value)))}
-                    className="w-full bg-transparent font-black text-sm text-gray-900 focus:outline-none"
-                    required
-                  />
-                  <span className="text-xs font-extrabold text-gray-500">Menit</span>
-                </div>
-                <p className="text-[11px] text-gray-500">
-                  Akses absen dibuka N menit sebelum jam mulai jadwal.
-                </p>
-              </div>
-
-              {/* Toleransi Akhir */}
-              <div className="bg-gray-50/80 rounded-xl p-4 border border-gray-200/80 space-y-2">
-                <label className="text-xs font-bold text-gray-800 block">
-                  Batas Absen Setelah Jam Selesai:
-                </label>
-                <div className="flex items-center gap-2 bg-white border border-gray-300 rounded-lg px-3 py-2 focus-within:border-amber-500">
-                  <input
-                    type="number"
-                    min="0"
-                    max="180"
-                    value={toleransiAkhir}
-                    onChange={(e) => setToleransiAkhir(Math.max(0, Number(e.target.value)))}
-                    className="w-full bg-transparent font-black text-sm text-gray-900 focus:outline-none"
-                    required
-                  />
-                  <span className="text-xs font-extrabold text-gray-500">Menit</span>
-                </div>
-                <p className="text-[11px] text-gray-500">
-                  Batas waktu toleransi maksimal setelah jam pelajaran berakhir.
-                </p>
-              </div>
-
-              {/* Toleransi Terlambat */}
-              <div className="bg-gray-50/80 rounded-xl p-4 border border-gray-200/80 space-y-2">
-                <label className="text-xs font-bold text-gray-800 block">
-                  Batas Toleransi Terlambat Masuk:
-                </label>
-                <div className="flex items-center gap-2 bg-white border border-gray-300 rounded-lg px-3 py-2 focus-within:border-amber-500">
-                  <input
-                    type="number"
-                    min="0"
-                    max="120"
-                    value={toleransiGuruInput}
-                    onChange={(e) => setToleransiGuruInput(Math.max(0, Number(e.target.value)))}
-                    className="w-full bg-transparent font-black text-sm text-amber-900 focus:outline-none"
-                    required
-                  />
-                  <span className="text-xs font-extrabold text-gray-500">Menit</span>
-                </div>
-                <p className="text-[11px] text-gray-500">
-                  Lewat dari ini, status otomatis diset <strong>Terlambat Masuk Kelas</strong>.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex justify-end pt-2">
-              <button
-                type="submit"
-                disabled={savingToleransi}
-                className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold px-5 py-2.5 rounded-xl shadow-sm transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                <Check className="w-4 h-4" />
-                {savingToleransi ? "Menyimpan..." : "Simpan Pengaturan Jam"}
-              </button>
-            </div>
-          </form>
-
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex flex-col md:flex-row items-center justify-between gap-4">
-            <div>
-              <h3 className="font-extrabold text-gray-900 text-sm flex items-center gap-2">
-                <Clock className="w-5 h-5 text-amber-500" />
-                Pengaturan Slot Jam Pelajaran Sekolah
-              </h3>
-              <p className="text-xs text-gray-500 font-medium mt-0.5">
-                Atur durasi dan rentang jam ke-1, ke-2, jam istirahat, hingga jam ke-N yang berlaku untuk seluruh kelas.
-              </p>
-            </div>
-
-            <button
-              onClick={() => {
-                setEditJamId(null);
-                setJamForm({
-                  jam_ke: jamSlots.length + 1,
-                  nama_jam: `Jam ke-${jamSlots.length + 1}`,
-                  jam_mulai: "07:00",
-                  jam_selesai: "07:45",
-                  tipe: "Pelajaran"
-                });
-                setShowJamModal(true);
-              }}
-              className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold px-4 py-2.5 rounded-xl shadow-sm transition-all flex items-center gap-1.5 shrink-0"
-            >
-              <Plus className="w-4 h-4" />
-              + Tambah Slot Jam Pelajaran
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {jamSlots.map((slot) => (
-              <div key={slot.id_jam} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 relative hover:border-amber-200 transition-all">
-                <div className="flex justify-between items-start mb-2">
-                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black ${
-                    slot.tipe === "Pelajaran" ? "bg-amber-100 text-amber-900 border border-amber-200" : "bg-purple-100 text-purple-900 border border-purple-200"
-                  }`}>
-                    {slot.tipe}
-                  </span>
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => {
-                        setEditJamId(slot.id_jam);
-                        setJamForm({
-                          jam_ke: slot.jam_ke,
-                          nama_jam: slot.nama_jam,
-                          jam_mulai: slot.jam_mulai,
-                          jam_selesai: slot.jam_selesai,
-                          tipe: slot.tipe
-                        });
-                        setShowJamModal(true);
-                      }}
-                      className="p-1 text-gray-400 hover:text-amber-600"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteJamSlot(slot.id_jam, slot.nama_jam)}
-                      className="p-1 text-gray-400 hover:text-rose-600"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                <h4 className="font-extrabold text-gray-900 text-sm">{slot.nama_jam}</h4>
-                <div className="mt-2 text-xs font-mono font-bold text-gray-600 flex items-center gap-1.5 bg-gray-50 p-2 rounded-xl">
-                  <Clock className="w-4 h-4 text-amber-500" />
-                  <span>{slot.jam_mulai} WIB - {slot.jam_selesai} WIB</span>
-                </div>
-              </div>
-            ))}
           </div>
         </div>
       )}
@@ -2078,108 +1746,6 @@ export default function JadwalGuru({ session }: { session?: any }) {
                   className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs rounded-xl shadow-sm"
                 >
                   Simpan Jadwal Pelajaran
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 2: ADD / EDIT JAM SLOT */}
-      {showJamModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-start justify-center p-4 sm:p-6 pt-4 sm:pt-10 overflow-y-auto z-50 animate-fade-in">
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-xl max-w-md w-full overflow-hidden my-auto sm:my-0">
-            <div className="p-5 bg-amber-600 text-white flex justify-between items-center">
-              <h3 className="font-extrabold text-sm tracking-tight flex items-center gap-2">
-                <Clock className="w-4.5 h-4.5" />
-                {editJamId ? "Edit Slot Jam Pelajaran" : "Tambah Slot Jam Pelajaran"}
-              </h3>
-              <button 
-                onClick={() => setShowJamModal(false)}
-                className="text-white/80 hover:text-white text-lg font-bold"
-              >
-                ×
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveJamSlot} className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-gray-600">Jam Ke-</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="20"
-                    value={jamForm.jam_ke}
-                    onChange={(e) => setJamForm({ ...jamForm, jam_ke: Number(e.target.value) })}
-                    required
-                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-xs text-gray-800 font-bold focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-gray-600">Tipe Slot</label>
-                  <select
-                    value={jamForm.tipe}
-                    onChange={(e) => setJamForm({ ...jamForm, tipe: e.target.value as any })}
-                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-xs text-gray-800 font-bold focus:outline-none focus:border-amber-500"
-                  >
-                    <option value="Pelajaran">Pelajaran</option>
-                    <option value="Istirahat">Istirahat</option>
-                    <option value="Upacara">Upacara</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-gray-600">Nama Slot / Keterangan</label>
-                <input
-                  type="text"
-                  placeholder="Contoh: Jam ke-1, Istirahat Pertama"
-                  value={jamForm.nama_jam}
-                  onChange={(e) => setJamForm({ ...jamForm, nama_jam: e.target.value })}
-                  required
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-xs text-gray-800 font-bold focus:outline-none focus:border-amber-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-gray-600">Jam Mulai</label>
-                  <input
-                    type="time"
-                    value={jamForm.jam_mulai}
-                    onChange={(e) => setJamForm({ ...jamForm, jam_mulai: e.target.value })}
-                    required
-                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-xs text-gray-800 font-mono font-bold focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-gray-600">Jam Selesai</label>
-                  <input
-                    type="time"
-                    value={jamForm.jam_selesai}
-                    onChange={(e) => setJamForm({ ...jamForm, jam_selesai: e.target.value })}
-                    required
-                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-xs text-gray-800 font-mono font-bold focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-3 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowJamModal(false)}
-                  className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs rounded-xl"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs rounded-xl shadow-sm"
-                >
-                  Simpan Slot
                 </button>
               </div>
             </form>

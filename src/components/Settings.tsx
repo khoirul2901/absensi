@@ -36,10 +36,14 @@ import {
   FileSpreadsheet,
   Layers,
   CheckCircle2,
-  ExternalLink
+  ExternalLink,
+  Edit2,
+  BookOpen,
+  SlidersHorizontal,
+  X
 } from "lucide-react";
 import { callGas, getStorageKey, setStorage, getStorage, extractArrayData, cleanTimeHHMM, getSchoolProfile, setSchoolProfile } from "../lib/gasApi";
-import { ConfigJam, HariLibur } from "../types";
+import { ConfigJam, HariLibur, JamPelajaranItem } from "../types";
 
 export default function Settings() {
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -97,6 +101,25 @@ export default function Settings() {
   const [liburList, setLiburList] = useState<HariLibur[]>([]);
   const [newLiburTgl, setNewLiburTgl] = useState("");
   const [newLiburKet, setNewLiburKet] = useState("");
+
+  // Jam Pelajaran Slots State
+  const [jamSlots, setJamSlots] = useState<JamPelajaranItem[]>([]);
+  const [showJamModal, setShowJamModal] = useState(false);
+  const [editJamId, setEditJamId] = useState<string | null>(null);
+  const [jamForm, setJamForm] = useState({
+    jam_ke: 1,
+    nama_jam: "Jam ke-1",
+    jam_mulai: "07:00",
+    jam_selesai: "07:45",
+    tipe: "Pelajaran" as "Pelajaran" | "Istirahat" | "Upacara"
+  });
+
+  // Settings for Schedule Restriction & Tolerances
+  const [batasiJamJadwal, setBatasiJamJadwal] = useState<boolean>(true);
+  const [toleransiAwal, setToleransiAwal] = useState<number>(15);
+  const [toleransiAkhir, setToleransiAkhir] = useState<number>(30);
+  const [toleransiGuruInput, setToleransiGuruInput] = useState<number>(15);
+  const [savingToleransi, setSavingToleransi] = useState<boolean>(false);
 
   // Token API State
   const [apiToken, setApiToken] = useState<string>(() => {
@@ -200,6 +223,21 @@ export default function Settings() {
     }
   };
 
+  // Load Jam Pelajaran Slots
+  const loadJamSlots = async () => {
+    try {
+      const resJam = await callGas("getJamPelajaran");
+      const jamData = extractArrayData(resJam);
+      setJamSlots(jamData);
+      if (jamData.length > 0) {
+        setStorage("jam_pelajaran", jamData);
+      }
+    } catch (e) {
+      const stored = getStorage("jam_pelajaran") || [];
+      setJamSlots(stored);
+    }
+  };
+
   // Load Config on Mount
   const loadConfig = async () => {
     try {
@@ -219,6 +257,14 @@ export default function Settings() {
         if (data.jam_masuk_batas) setConfigJam(prev => ({ ...prev, jam_masuk_batas: cleanTimeHHMM(data.jam_masuk_batas) || prev.jam_masuk_batas }));
         if (data.jam_pulang_mulai) setConfigJam(prev => ({ ...prev, jam_pulang_mulai: cleanTimeHHMM(data.jam_pulang_mulai) || prev.jam_pulang_mulai }));
 
+        if (data.batasi_jam_jadwal !== undefined) setBatasiJamJadwal(Boolean(data.batasi_jam_jadwal));
+        if (data.toleransi_awal_menit !== undefined) setToleransiAwal(Number(data.toleransi_awal_menit) || 15);
+        if (data.toleransi_akhir_menit !== undefined) setToleransiAkhir(Number(data.toleransi_akhir_menit) || 30);
+        const val = Number(data.toleransi_guru ?? data.toleransi_mengajar_guru);
+        if (!isNaN(val) && val >= 0) {
+          setToleransiGuruInput(val);
+        }
+
         if (data.apiToken) setApiToken(data.apiToken);
         if (data.backupMode) setBackupMode(data.backupMode);
         if (data.backupFrekuensi) setBackupFrekuensi(data.backupFrekuensi);
@@ -233,6 +279,9 @@ export default function Settings() {
         ? liburRes
         : (liburRes?.data && Array.isArray(liburRes.data) ? liburRes.data : []);
       setLiburList(libList);
+
+      // Load Jam Pelajaran
+      await loadJamSlots();
     } catch (e) {
       console.error(e);
     } finally {
@@ -243,6 +292,93 @@ export default function Settings() {
   useEffect(() => {
     loadConfig();
   }, []);
+
+  // Save Toleransi & Batasan Presensi Guru
+  const handleSaveToleransi = async (e: FormEvent) => {
+    e.preventDefault();
+    setSavingToleransi(true);
+    setLoadingAction("Menyimpan aturan jam & toleransi...");
+    try {
+      const payload = {
+        batasi_jam_jadwal: batasiJamJadwal,
+        toleransi_awal_menit: toleransiAwal,
+        toleransi_akhir_menit: toleransiAkhir,
+        toleransi_guru: toleransiGuruInput,
+        toleransi_mengajar_guru: toleransiGuruInput
+      };
+      const res = await callGas("simpanPengaturan", [payload]);
+      if (res && res.success !== false) {
+        alert("Pengaturan toleransi presensi guru & batasan jam berhasil disimpan!");
+      } else {
+        alert(res?.message || "Pengaturan disimpan secara lokal.");
+      }
+    } catch (err: any) {
+      alert("Gagal menyimpan toleransi: " + err.toString());
+    } finally {
+      setSavingToleransi(false);
+      setLoadingAction(null);
+    }
+  };
+
+  // Save Jam Pelajaran Slot
+  const handleSaveJamSlot = async (e: FormEvent) => {
+    e.preventDefault();
+    const payload = {
+      id_jam: editJamId || `JP-${Date.now()}`,
+      jam_ke: Number(jamForm.jam_ke),
+      nama_jam: jamForm.nama_jam || `Jam ke-${jamForm.jam_ke}`,
+      jam_mulai: jamForm.jam_mulai,
+      jam_selesai: jamForm.jam_selesai,
+      tipe: jamForm.tipe
+    };
+
+    try {
+      setLoading(true);
+      setLoadingAction(editJamId ? "Mengupdate slot jam pelajaran..." : "Menambah slot jam pelajaran...");
+      let res;
+      if (editJamId) {
+        res = await callGas("editJamPelajaran", [editJamId, payload]);
+      } else {
+        res = await callGas("tambahJamPelajaran", [payload]);
+      }
+
+      if (res && res.success !== false) {
+        setShowJamModal(false);
+        setEditJamId(null);
+        await loadJamSlots();
+        alert(res?.message || "Slot jam pelajaran berhasil disimpan!");
+      } else {
+        alert(res?.message || "Gagal menyimpan slot jam pelajaran.");
+      }
+    } catch (err: any) {
+      alert("Kesalahan: " + err.toString());
+    } finally {
+      setLoading(false);
+      setLoadingAction(null);
+    }
+  };
+
+  // Delete Jam Pelajaran Slot
+  const handleDeleteJamSlot = async (idJam: string, namaJam: string) => {
+    if (confirm(`Hapus slot ${namaJam}?`)) {
+      try {
+        setLoading(true);
+        setLoadingAction("Menghapus slot jam...");
+        const res = await callGas("hapusJamPelajaran", [idJam]);
+        if (res && res.success !== false) {
+          await loadJamSlots();
+          alert("Slot jam berhasil dihapus.");
+        } else {
+          alert(res?.message || "Gagal menghapus slot jam.");
+        }
+      } catch (err: any) {
+        alert("Kesalahan: " + err.toString());
+      } finally {
+        setLoading(false);
+        setLoadingAction(null);
+      }
+    }
+  };
 
   // Save Card & Profile Settings
   const handleSaveCardConfig = async (e: FormEvent) => {
@@ -891,7 +1027,7 @@ export default function Settings() {
         </div>
       )}
 
-      {/* TAB 2: JAM OPERASIONAL & HARI LIBUR */}
+      {/* TAB 2: JAM OPERASIONAL, SLOT JAM PELAJARAN, & HARI LIBUR */}
       {activeTab === "jam" && (
         <div className="space-y-6">
           {/* Form Jam Operasional */}
@@ -901,8 +1037,8 @@ export default function Settings() {
                 <Clock className="w-5 h-5" />
               </div>
               <div>
-                <h2 className="text-base font-extrabold text-gray-900">Jam Operasional Presensi</h2>
-                <p className="text-xs text-gray-500">Tentukan batas toleransi waktu hadir dan jam pulang otomatis presensi</p>
+                <h2 className="text-base font-extrabold text-gray-900">Jam Operasional Presensi Harian</h2>
+                <p className="text-xs text-gray-500">Tentukan batas waktu hadir umum siswa/guru dan jam pulang otomatis</p>
               </div>
             </div>
 
@@ -956,6 +1092,209 @@ export default function Settings() {
             </div>
           </form>
 
+          {/* Pengaturan Slot Jam Pelajaran (Jam ke-1, Jam ke-2, dll) */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 md:p-8 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-blue-50 rounded-xl text-blue-600">
+                  <BookOpen className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-extrabold text-gray-900">Pengaturan Slot Jam Pelajaran</h2>
+                  <p className="text-xs text-gray-500">Konfigurasi daftar jam ke-1, ke-2, istirahat, hingga pulang beserta rentang waktunya</p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEditJamId(null);
+                  const nextNum = jamSlots.length > 0 ? Math.max(...jamSlots.map(j => Number(j.jam_ke) || 0)) + 1 : 1;
+                  setJamForm({
+                    jam_ke: nextNum,
+                    nama_jam: `Jam ke-${nextNum}`,
+                    jam_mulai: "07:00",
+                    jam_selesai: "07:45",
+                    tipe: "Pelajaran"
+                  });
+                  setShowJamModal(true);
+                }}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs px-4 py-2.5 rounded-xl transition-all shadow-sm flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ Tambah Slot Jam Pelajaran</span>
+              </button>
+            </div>
+
+            {jamSlots.length === 0 ? (
+              <div className="text-center py-10 border-2 border-dashed border-gray-200 rounded-2xl">
+                <Clock className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+                <p className="text-xs text-gray-500 font-semibold">Belum ada slot jam pelajaran yang dibuat.</p>
+                <p className="text-[11px] text-gray-400 mt-1">Klik tombol di atas untuk menambahkan jam pelajaran sekolah.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {jamSlots
+                  .slice()
+                  .sort((a, b) => Number(a.jam_ke) - Number(b.jam_ke))
+                  .map((slot) => (
+                    <div
+                      key={slot.id_jam}
+                      className={`p-4 rounded-2xl border transition-all flex flex-col justify-between ${
+                        slot.tipe === "Istirahat"
+                          ? "bg-amber-50/50 border-amber-200"
+                          : slot.tipe === "Upacara"
+                          ? "bg-purple-50/50 border-purple-200"
+                          : "bg-gray-50/70 border-gray-200/80 hover:border-blue-300"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 h-6 rounded-lg bg-white shadow-xs border border-gray-200 flex items-center justify-center text-xs font-black text-gray-800">
+                              {slot.jam_ke}
+                            </span>
+                            <span className="font-extrabold text-sm text-gray-900">{slot.nama_jam}</span>
+                          </div>
+                          <div className="mt-2.5 flex items-center gap-2 font-mono font-bold text-xs text-blue-700 bg-white px-2.5 py-1 rounded-lg border border-blue-100 shadow-2xs w-fit">
+                            <Clock className="w-3.5 h-3.5 text-blue-500" />
+                            {slot.jam_mulai} - {slot.jam_selesai}
+                          </div>
+                        </div>
+
+                        <span
+                          className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border ${
+                            slot.tipe === "Istirahat"
+                              ? "bg-amber-100 text-amber-800 border-amber-300"
+                              : slot.tipe === "Upacara"
+                              ? "bg-purple-100 text-purple-800 border-purple-300"
+                              : "bg-emerald-100 text-emerald-800 border-emerald-300"
+                          }`}
+                        >
+                          {slot.tipe || "Pelajaran"}
+                        </span>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-gray-200/60 flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditJamId(slot.id_jam);
+                            setJamForm({
+                              jam_ke: Number(slot.jam_ke) || 1,
+                              nama_jam: slot.nama_jam || `Jam ke-${slot.jam_ke}`,
+                              jam_mulai: slot.jam_mulai || "07:00",
+                              jam_selesai: slot.jam_selesai || "07:45",
+                              tipe: (slot.tipe as any) || "Pelajaran"
+                            });
+                            setShowJamModal(true);
+                          }}
+                          className="px-2.5 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteJamSlot(slot.id_jam, slot.nama_jam)}
+                          className="px-2.5 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-100 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Hapus</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+
+          {/* Pengaturan Batasan & Toleransi Presensi Mengajar Guru */}
+          <form onSubmit={handleSaveToleransi} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 md:p-8 space-y-6">
+            <div className="flex items-center gap-3 border-b border-gray-100 pb-4">
+              <div className="p-2.5 bg-emerald-50 rounded-xl text-emerald-600">
+                <SlidersHorizontal className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-base font-extrabold text-gray-900">Aturan & Toleransi Presensi Mengajar Guru</h2>
+                <p className="text-xs text-gray-500">Atur validasi jam masuk kelas, batas toleransi awal dan akhir scan presensi mengajar</p>
+              </div>
+            </div>
+
+            <div className="space-y-5">
+              {/* Toggle Batasi Presensi Sesuai Jam Pelajaran */}
+              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200">
+                <div>
+                  <h4 className="text-xs font-bold text-gray-800">Batasi Presensi Mengajar Sesuai Jam Pelajaran</h4>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Guru hanya diperbolehkan melakukan absensi mengajar saat masuk rentang jam pelajaran yang sesuai jadwal
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={batasiJamJadwal} 
+                    onChange={(e) => setBatasiJamJadwal(e.target.checked)}
+                    className="sr-only peer" 
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-700">Toleransi Akses Awal (Menit)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={60}
+                    value={toleransiAwal}
+                    onChange={(e) => setToleransiAwal(Number(e.target.value))}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-900 font-bold focus:outline-none focus:border-emerald-500"
+                  />
+                  <p className="text-[10px] text-gray-400">Boleh absen sekian menit sebelum jam mulai pelajaran.</p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-700">Toleransi Batas Akhir (Menit)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={120}
+                    value={toleransiAkhir}
+                    onChange={(e) => setToleransiAkhir(Number(e.target.value))}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-900 font-bold focus:outline-none focus:border-emerald-500"
+                  />
+                  <p className="text-[10px] text-gray-400">Batas akhir boleh absen sekian menit setelah jam selesai pelajaran.</p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-700 text-rose-700">Batas Toleransi Terlambat Guru (Menit)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={60}
+                    value={toleransiGuruInput}
+                    onChange={(e) => setToleransiGuruInput(Number(e.target.value))}
+                    className="w-full bg-rose-50/50 border border-rose-200 rounded-xl p-3 text-xs text-rose-900 font-bold focus:outline-none focus:border-rose-500"
+                  />
+                  <p className="text-[10px] text-rose-500">Lewat dari sekian menit setelah jam mulai, guru dicatat "Terlambat Masuk Kelas".</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end border-t border-gray-100 pt-5">
+              <button
+                type="submit"
+                disabled={savingToleransi || loading}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs px-6 py-3 rounded-xl transition-all shadow-sm flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <Save className="w-4 h-4" />
+                <span>{savingToleransi ? "Menyimpan..." : "Simpan Aturan Presensi Guru"}</span>
+              </button>
+            </div>
+          </form>
+
           {/* Konfigurasi & Uji Sistem Otomatisasi Alfa (Jam 18:00 WIB) */}
           <div className="bg-white rounded-2xl border border-amber-200/80 shadow-sm p-6 md:p-8 space-y-6">
             <div className="flex items-center gap-3 border-b border-gray-100 pb-4">
@@ -1004,6 +1343,7 @@ export default function Settings() {
                       alert("Error: " + e.toString());
                     } finally {
                       setLoading(false);
+                      setLoadingAction(null);
                     }
                   }}
                   className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs px-4 py-2.5 rounded-xl transition-all shadow-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
@@ -1085,8 +1425,9 @@ export default function Settings() {
                         <td className="py-3 px-4 font-semibold text-gray-800">{item.keterangan}</td>
                         <td className="py-3 px-4 text-center">
                           <button
+                            type="button"
                             onClick={() => handleDeleteHoliday(item.tanggal)}
-                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
                             title="Hapus Hari Libur"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -2078,6 +2419,132 @@ function jsonResponse(obj) {
           </form>
         </div>
       )}
+      {/* Modal Tambah / Edit Slot Jam Pelajaran */}
+      {showJamModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-gray-100 animate-scale-up">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+                  <Clock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-gray-900">
+                    {editJamId ? "Edit Slot Jam Pelajaran" : "Tambah Slot Jam Pelajaran"}
+                  </h3>
+                  <p className="text-[11px] text-gray-500">Tentukan urutan jam, nama sesi, dan jam mulai - selesai</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowJamModal(false)}
+                className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveJamSlot} className="space-y-4 pt-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700">Urutan / Jam Ke</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    required
+                    value={jamForm.jam_ke}
+                    onChange={(e) => {
+                      const num = Number(e.target.value);
+                      setJamForm({
+                        ...jamForm,
+                        jam_ke: num,
+                        nama_jam: jamForm.tipe === "Pelajaran" ? `Jam ke-${num}` : jamForm.nama_jam
+                      });
+                    }}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-xs text-gray-900 font-bold focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700">Tipe Slot</label>
+                  <select
+                    value={jamForm.tipe}
+                    onChange={(e) => {
+                      const newTipe = e.target.value as any;
+                      setJamForm({
+                        ...jamForm,
+                        tipe: newTipe,
+                        nama_jam: newTipe === "Istirahat" ? "Istirahat" : newTipe === "Upacara" ? "Upacara Bendera" : `Jam ke-${jamForm.jam_ke}`
+                      });
+                    }}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-xs text-gray-900 font-bold focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="Pelajaran">Pelajaran</option>
+                    <option value="Istirahat">Istirahat</option>
+                    <option value="Upacara">Upacara</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-gray-700">Nama / Label Sesi Jam</label>
+                <input
+                  type="text"
+                  required
+                  value={jamForm.nama_jam}
+                  onChange={(e) => setJamForm({ ...jamForm, nama_jam: e.target.value })}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-xs text-gray-900 font-bold focus:outline-none focus:border-blue-500"
+                  placeholder="Misal: Jam ke-1 / Istirahat Pagi / Upacara"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700">Jam Mulai</label>
+                  <input
+                    type="time"
+                    required
+                    value={jamForm.jam_mulai}
+                    onChange={(e) => setJamForm({ ...jamForm, jam_mulai: e.target.value })}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-xs text-gray-900 font-mono font-bold focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700">Jam Selesai</label>
+                  <input
+                    type="time"
+                    required
+                    value={jamForm.jam_selesai}
+                    onChange={(e) => setJamForm({ ...jamForm, jam_selesai: e.target.value })}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-xs text-gray-900 font-mono font-bold focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setShowJamModal(false)}
+                  className="px-4 py-2.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-gray-50 transition-all cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs font-extrabold text-white transition-all shadow-sm flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>Simpan Slot</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Global Loading Overlay */}
       {loadingAction && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs animate-fade-in">
