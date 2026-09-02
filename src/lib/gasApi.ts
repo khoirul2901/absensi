@@ -1134,8 +1134,12 @@ export function callMock(action: string, args: any[] = []): any {
       
       const tgl = tanggal || new Date().toISOString().split("T")[0];
       const jam = new Date().toTimeString().slice(0, 5);
-      const isGuruUser = Boolean(user.id_guru || user.nama_guru || user.nip_nuptk);
-      const activeKategori = isGuruUser ? "Guru" : "Siswa";
+      
+      // Strict role identification: check student fields first then teacher fields
+      const isSiswaExplicit = Boolean(user.id_siswa || user.nisn || (user.kelas && user.kelas !== "-"));
+      const isGuruExplicit = Boolean(user.id_guru || user.nip_nuptk || user.jabatan_tugas);
+      const activeKategori = isSiswaExplicit ? "Siswa" : (isGuruExplicit ? "Guru" : (kategori === "Siswa" ? "Siswa" : "Guru"));
+      
       const reportsKey = activeKategori === "Siswa" ? "laporan_siswa" : "laporan_guru";
       const reports = getStorage(reportsKey) || [];
       
@@ -1147,9 +1151,15 @@ export function callMock(action: string, args: any[] = []): any {
       
       // Index in daily attendance report
       const index = reports.findIndex((r: any) => r.tanggal === tgl && (r[activeIdKey] === idTarget || r.id_siswa === idTarget || r.id_guru === idTarget || r.id_target === idTarget));
-      const cfg = JSON.parse(localStorage.getItem(getStorageKey("MOCK_pengaturan_jam")) || "{}");
-      const defaultJamMasukBatas = cfg.jam_masuk_batas || "07:15";
-      const defaultJamPulangMulai = cfg.jam_pulang_mulai || "15:30";
+      const cfg = (() => {
+        try {
+          return JSON.parse(localStorage.getItem(getStorageKey("MOCK_pengaturan_jam")) || localStorage.getItem(getStorageKey("pengaturan_jam")) || "{}");
+        } catch (e) {
+          return {};
+        }
+      })();
+      const defaultJamMasukBatas = cleanTimeHHMM(cfg.jam_masuk_batas || cfg.jamMasukBatas) || "07:15";
+      const defaultJamPulangMulai = cleanTimeHHMM(cfg.jam_pulang_mulai || cfg.jamPulangMulai) || "15:30";
 
       const hariList = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
       const hariIni = hariList[new Date().getDay()];
@@ -1158,32 +1168,60 @@ export function callMock(action: string, args: any[] = []): any {
       // 1. MODEL SISWA (Presensi Masuk & Pulang)
       // ==========================================
       if (activeKategori === "Siswa") {
-        const jamPulangSiswa = cfg.jam_pulang_mulai || "14:00";
         const nowMinSiswa = parseTimeToMinutes(jam);
-        const pulangMinSiswa = parseTimeToMinutes(jamPulangSiswa);
-        const isTimeForPulang = (nowMinSiswa >= pulangMinSiswa) || (mode === "Pulang" && nowMinSiswa >= (12 * 60));
+        const pulangMinSiswa = parseTimeToMinutes(defaultJamPulangMulai);
+        const isTimeForPulang = (mode === "Pulang") || (mode !== "Masuk" && nowMinSiswa >= pulangMinSiswa);
 
         if (!isTimeForPulang) {
           // Masuk Period for Siswa
           if (index !== -1 && reports[index].jam_masuk && reports[index].jam_masuk !== "-") {
             return { 
               success: true, 
+              role: "Siswa",
+              kategori: "Siswa",
+              name: nama,
+              status: reports[index].status_masuk || "Tepat Waktu",
               type: "info",
-              message: `${nama} sudah melakukan presensi masuk hari ini (${reports[index].jam_masuk} WIB)! Belum jam pulang sekolah (Pk ${jamPulangSiswa} WIB).`, 
-              data: reports[index] 
+              message: `${nama} sudah melakukan presensi masuk hari ini (${reports[index].jam_masuk} WIB)! Belum jam pulang sekolah (Pk ${defaultJamPulangMulai} WIB).`, 
+              data: {
+                ...reports[index],
+                role: "Siswa",
+                kategori: "Siswa",
+                nama_siswa: nama,
+                nama: nama,
+                status: reports[index].status_masuk || "Tepat Waktu"
+              }
             };
           }
 
           const defaultBatasMin = parseTimeToMinutes(defaultJamMasukBatas || "07:15");
           const toleransiSiswa = Number(cfg.toleransi_keterlambatan || cfg.toleransi_siswa || 0);
-          const statusMasuk = (nowMinSiswa <= defaultBatasMin + toleransiSiswa) ? "Tepat Waktu" : "Terlambat";
+          const isLate = nowMinSiswa > (defaultBatasMin + toleransiSiswa);
+          const statusMasuk = isLate ? "Terlambat" : "Tepat Waktu";
           const idLog = "LOG-S-" + new Date().getTime();
 
           if (index !== -1) {
             reports[index].jam_masuk = jam;
             reports[index].status_masuk = statusMasuk;
             setStorage(reportsKey, reports);
-            return { success: true, type: "masuk", message: `Presensi Masuk Berhasil: ${nama} (${statusMasuk})`, data: reports[index] };
+            return { 
+              success: true, 
+              role: "Siswa",
+              kategori: "Siswa",
+              name: nama,
+              status: statusMasuk,
+              type: "masuk", 
+              message: `Presensi Masuk Berhasil: ${nama} (${statusMasuk})`, 
+              data: {
+                ...reports[index],
+                role: "Siswa",
+                kategori: "Siswa",
+                nama_siswa: nama,
+                nama: nama,
+                status: statusMasuk,
+                status_masuk: statusMasuk
+              } 
+            };
           }
 
           const newRow = {
@@ -1200,14 +1238,49 @@ export function callMock(action: string, args: any[] = []): any {
           };
           reports.push(newRow);
           setStorage(reportsKey, reports);
-          return { success: true, type: "masuk", message: `Presensi Masuk Berhasil: ${nama} (${statusMasuk})`, data: newRow };
+          return { 
+            success: true, 
+            role: "Siswa",
+            kategori: "Siswa",
+            name: nama,
+            status: statusMasuk,
+            type: "masuk", 
+            message: `Presensi Masuk Berhasil: ${nama} (${statusMasuk})`, 
+            data: {
+              ...newRow,
+              role: "Siswa",
+              kategori: "Siswa",
+              nama_siswa: nama,
+              nama: nama,
+              status: statusMasuk,
+              status_masuk: statusMasuk
+            } 
+          };
         } else {
           // Pulang Period for Siswa
+          const statusPulang = (nowMinSiswa < pulangMinSiswa) ? "Pulang Cepat" : "Tepat Waktu";
           if (index !== -1) {
             reports[index].jam_pulang = jam;
-            reports[index].status_pulang = "Tepat Waktu";
+            reports[index].status_pulang = statusPulang;
             setStorage(reportsKey, reports);
-            return { success: true, type: "pulang", message: `Presensi Pulang Berhasil: ${nama}`, data: reports[index] };
+            return { 
+              success: true, 
+              role: "Siswa",
+              kategori: "Siswa",
+              name: nama,
+              status: statusPulang,
+              type: "pulang", 
+              message: `Presensi Pulang Berhasil: ${nama} (${statusPulang})`, 
+              data: {
+                ...reports[index],
+                role: "Siswa",
+                kategori: "Siswa",
+                nama_siswa: nama,
+                nama: nama,
+                status: statusPulang,
+                status_pulang: statusPulang
+              } 
+            };
           } else {
             const idLog = "LOG-S-" + new Date().getTime();
             const newRow = {
@@ -1219,12 +1292,29 @@ export function callMock(action: string, args: any[] = []): any {
               jam_masuk: "-",
               status_masuk: "Lupa Scan Masuk",
               jam_pulang: jam,
-              status_pulang: "Tepat Waktu",
+              status_pulang: statusPulang,
               ket: "Lupa Scan Masuk"
             };
             reports.push(newRow);
             setStorage(reportsKey, reports);
-            return { success: true, type: "pulang", message: `Presensi Pulang Berhasil: ${nama} (Lupa Scan Masuk)`, data: newRow };
+            return { 
+              success: true, 
+              role: "Siswa",
+              kategori: "Siswa",
+              name: nama,
+              status: statusPulang,
+              type: "pulang", 
+              message: `Presensi Pulang Berhasil: ${nama} (${statusPulang})`, 
+              data: {
+                ...newRow,
+                role: "Siswa",
+                kategori: "Siswa",
+                nama_siswa: nama,
+                nama: nama,
+                status: statusPulang,
+                status_pulang: statusPulang
+              } 
+            };
           }
         }
       }
@@ -1579,12 +1669,19 @@ export function callMock(action: string, args: any[] = []): any {
 
           return {
             success: true,
+            role: "Guru",
+            kategori: "Guru",
+            name: nama,
+            status: statusMengajar,
             type: "mengajar",
             targetSheet: "AbsensiMengajar",
             message: `Presensi Mengajar Berhasil: ${nama} (${activeSlotMatch.mapel} - ${activeSlotMatch.kelas}, ${jamLabel})`,
             data: {
               ...activeSlotMatch,
+              role: "Guru",
+              kategori: "Guru",
               nama_guru: nama,
+              nama: nama,
               id_guru: idTarget,
               tanggal: tgl,
               waktu_absen: jam,
@@ -1604,11 +1701,18 @@ export function callMock(action: string, args: any[] = []): any {
         if (allTeachingClassesDone) {
           return {
             success: true,
+            role: "Guru",
+            kategori: "Guru",
+            name: nama,
+            status: "Selesai Mengajar",
             type: "info",
             targetSheet: "AbsensiMengajar",
             message: `${nama} sudah menyelesaikan seluruh jadwal mengajar hari ini (${totalTeachingClasses} jam pelajaran). Seluruh presensi telah tercatat di sheet AbsensiMengajar.`,
             data: {
+              role: "Guru",
+              kategori: "Guru",
               nama_guru: nama,
+              nama: nama,
               id_guru: idTarget,
               status: "Selesai Mengajar"
             }
@@ -1622,11 +1726,18 @@ export function callMock(action: string, args: any[] = []): any {
 
         return {
           success: true,
+          role: "Guru",
+          kategori: "Guru",
+          name: nama,
+          status: "Tepat Waktu",
           type: "info",
           targetSheet: "AbsensiMengajar",
           message: `${nama} sudah presensi kelas sebelumnya. Jadwal mengajar berikutnya: ${nextPending?.mapel || "Pelajaran"} (${nextPending?.kelas || "-"}) Jam Ke-${nextPending?.jam_ke || "-"} (${nextPending?.slotMulai || ""} WIB).`,
           data: {
+            role: "Guru",
+            kategori: "Guru",
             nama_guru: nama,
+            nama: nama,
             id_guru: idTarget,
             nextSchedule: nextPending
           }
@@ -1646,7 +1757,24 @@ export function callMock(action: string, args: any[] = []): any {
           reports[index].jam_masuk = jam;
           reports[index].status_masuk = statusMasuk;
           setStorage(reportsKey, reports);
-          return { success: true, type: "masuk", message: `Presensi Masuk Berhasil: ${nama} (${statusMasuk})`, data: reports[index] };
+          return { 
+            success: true, 
+            role: "Guru",
+            kategori: "Guru",
+            name: nama,
+            status: statusMasuk,
+            type: "masuk", 
+            message: `Presensi Masuk Berhasil: ${nama} (${statusMasuk})`, 
+            data: {
+              ...reports[index],
+              role: "Guru",
+              kategori: "Guru",
+              nama_guru: nama,
+              nama: nama,
+              status: statusMasuk,
+              status_masuk: statusMasuk
+            } 
+          };
         }
 
         const newRow = {
@@ -1662,15 +1790,43 @@ export function callMock(action: string, args: any[] = []): any {
         };
         reports.push(newRow);
         setStorage(reportsKey, reports);
-        return { success: true, type: "masuk", message: `Presensi Masuk Berhasil: ${nama} (${statusMasuk})`, data: newRow };
+        return { 
+          success: true, 
+          role: "Guru",
+          kategori: "Guru",
+          name: nama,
+          status: statusMasuk,
+          type: "masuk", 
+          message: `Presensi Masuk Berhasil: ${nama} (${statusMasuk})`, 
+          data: {
+            ...newRow,
+            role: "Guru",
+            kategori: "Guru",
+            nama_guru: nama,
+            nama: nama,
+            status: statusMasuk,
+            status_masuk: statusMasuk
+          } 
+        };
       }
 
       // Teacher already clocked in, no teaching schedule, not yet clock-out time
       return {
         success: true,
+        role: "Guru",
+        kategori: "Guru",
+        name: nama,
+        status: reports[index].status_masuk || "Tepat Waktu",
         type: "info",
         message: `${nama} sudah presensi masuk (${reports[index].jam_masuk} WIB). Tidak ada jadwal mengajar hari ini. Jam pulang dibuka pk ${guruJamPulangMulai} WIB.`,
-        data: reports[index]
+        data: {
+          ...reports[index],
+          role: "Guru",
+          kategori: "Guru",
+          nama_guru: nama,
+          nama: nama,
+          status: reports[index].status_masuk || "Tepat Waktu"
+        }
       };
     }
 

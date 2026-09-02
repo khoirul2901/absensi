@@ -1864,6 +1864,136 @@ function doPost(e) {
       return jsonResponse({ success: true, message: "Presensi siswa berhasil dicatat di PresensiSiswa!" });
     }
 
+    // Dedicated Smart Scanner Handler for Auto Kiosk & QR Scanner
+    if (action === "prosesScanQR") {
+      var qrCode = rawData.args && rawData.args[0] ? String(rawData.args[0]).trim() : String(rawData.code || rawData.qrContent || "").trim();
+      var reqKategori = rawData.args && rawData.args[1] ? String(rawData.args[1]).trim() : String(rawData.kategori || "Siswa").trim();
+      var modeReq = rawData.args && rawData.args[2] ? String(rawData.args[2]).trim() : String(rawData.mode || "Masuk").trim();
+      var tglReq = rawData.args && rawData.args[3] ? String(rawData.args[3]).trim() : Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
+      var jamReq = Utilities.formatDate(new Date(), tz, "HH:mm");
+      
+      var cleanCode = qrCode.toLowerCase();
+      var cleanWithoutPrefix = cleanCode.replace(/^(qr|id|s|g|nisn|nip|siswa|guru)[_:\-\s]+/i, '').trim();
+      
+      // 1. Search in DataSiswa
+      var sheetSiswa = getOrMakeSheet("DataSiswa", ["id_siswa", "nisn", "nama_siswa", "jenis_kelamin", "kelas", "jurusan", "no_hp_ortu", "qr_content"]);
+      var dataSiswa = getSheetObjects(sheetSiswa);
+      var userSiswa = null;
+      for (var i = 0; i < dataSiswa.length; i++) {
+        var s = dataSiswa[i];
+        var sQr = String(s.qr_content || s.qr_code || "").trim().toLowerCase();
+        var sId = String(s.id_siswa || "").trim().toLowerCase();
+        var sNisn = String(s.nisn || "").trim().toLowerCase();
+        var sNama = String(s.nama_siswa || s.nama || "").trim().toLowerCase();
+        if ((sQr && sQr === cleanCode) || (sId && sId === cleanCode) || (sNisn && sNisn === cleanCode) || (sNama && sNama === cleanCode) ||
+            (cleanWithoutPrefix && ((sQr && sQr === cleanWithoutPrefix) || (sId && sId === cleanWithoutPrefix) || (sNisn && sNisn === cleanWithoutPrefix)))) {
+          userSiswa = s;
+          break;
+        }
+      }
+
+      // 2. Search in DataGuru
+      var sheetGuru = getOrMakeSheet("DataGuru", ["id_guru", "nip_nuptk", "nama_guru", "jenis_kelamin", "jabatan_tugas", "no_hp", "qr_content"]);
+      var dataGuru = getSheetObjects(sheetGuru);
+      var userGuru = null;
+      if (!userSiswa) {
+        for (var i = 0; i < dataGuru.length; i++) {
+          var g = dataGuru[i];
+          var gQr = String(g.qr_content || g.qr_code || "").trim().toLowerCase();
+          var gId = String(g.id_guru || "").trim().toLowerCase();
+          var gNip = String(g.nip_nuptk || g.nip || "").trim().toLowerCase();
+          var gNama = String(g.nama_guru || g.nama || "").trim().toLowerCase();
+          if ((gQr && gQr === cleanCode) || (gId && gId === cleanCode) || (gNip && gNip === cleanCode) || (gNama && gNama === cleanCode) ||
+              (cleanWithoutPrefix && ((gQr && gQr === cleanWithoutPrefix) || (gId && gId === cleanWithoutPrefix) || (gNip && gNip === cleanWithoutPrefix)))) {
+            userGuru = g;
+            break;
+          }
+        }
+      }
+
+      // Get Settings for operational hours
+      var sheetPengaturan = getOrMakeSheet("Pengaturan", ["kunci", "nilai"]);
+      var confList = getSheetObjects(sheetPengaturan);
+      var conf = {};
+      for (var i = 0; i < confList.length; i++) {
+        var k = String(confList[i].kunci || confList[i].key || "").trim();
+        var v = confList[i].nilai !== undefined ? confList[i].nilai : confList[i].value;
+        if (k) conf[k] = v;
+      }
+      var jamBatasMasuk = cleanTimeStr(conf.jam_masuk_batas || conf.jamMasukBatas, "07:15");
+      var toleransiSiswa = Number(conf.toleransi_keterlambatan || conf.toleransi_siswa || 0);
+
+      if (userSiswa) {
+        var sheetPresensiSiswa = getOrMakeSheet("PresensiSiswa", ["id_log_siswa", "tanggal", "id_siswa", "nama_siswa", "kelas_jurusan", "jam_masuk", "status_masuk", "jam_pulang", "status_pulang", "ket"]);
+        var statusMasuk = "Tepat Waktu";
+        var partsReq = jamReq.split(":");
+        var reqMin = parseInt(partsReq[0], 10) * 60 + parseInt(partsReq[1], 10);
+        var partsBatas = jamBatasMasuk.split(":");
+        var batasMin = parseInt(partsBatas[0], 10) * 60 + parseInt(partsBatas[1], 10);
+        if (reqMin > (batasMin + toleransiSiswa)) {
+          var lateMins = reqMin - batasMin;
+          statusMasuk = "Terlambat (" + lateMins + " Menit)";
+        }
+        var kelasJurusan = [userSiswa.kelas, userSiswa.jurusan].filter(Boolean).join(" ");
+        var rowData = {
+          id_log_siswa: "LOG-S-" + Date.now(),
+          tanggal: tglReq,
+          id_siswa: userSiswa.id_siswa,
+          nama_siswa: userSiswa.nama_siswa,
+          kelas_jurusan: kelasJurusan || "-",
+          jam_masuk: modeReq === "Masuk" ? jamReq : "-",
+          status_masuk: modeReq === "Masuk" ? statusMasuk : "-",
+          jam_pulang: modeReq === "Pulang" ? jamReq : "-",
+          status_pulang: modeReq === "Pulang" ? "Tepat Waktu" : "-",
+          ket: "Auto Kiosk Scan"
+        };
+        upsertPresensiSiswa(sheetPresensiSiswa, rowData, tz);
+        return jsonResponse({
+          success: true,
+          role: "Siswa",
+          kategori: "Siswa",
+          name: userSiswa.nama_siswa,
+          status: modeReq === "Masuk" ? statusMasuk : "Tepat Waktu",
+          message: "Presensi Siswa Berhasil: " + userSiswa.nama_siswa + " (" + (modeReq === "Masuk" ? statusMasuk : "Pulang") + ")",
+          data: { ...rowData, role: "Siswa", kategori: "Siswa", nama: userSiswa.nama_siswa, nama_siswa: userSiswa.nama_siswa }
+        });
+      } else if (userGuru) {
+        var sheetPresensiGuru = getOrMakeSheet("PresensiGuru", ["id_log_guru", "tanggal", "id_guru", "nama_guru", "jam_masuk", "status_masuk", "jam_pulang", "status_pulang", "ket"]);
+        var statusMasuk = "Tepat Waktu";
+        var partsReq = jamReq.split(":");
+        var reqMin = parseInt(partsReq[0], 10) * 60 + parseInt(partsReq[1], 10);
+        var partsBatas = jamBatasMasuk.split(":");
+        var batasMin = parseInt(partsBatas[0], 10) * 60 + parseInt(partsBatas[1], 10);
+        if (reqMin > (batasMin + 15)) {
+          var lateMins = reqMin - batasMin;
+          statusMasuk = "Terlambat (" + lateMins + " Menit)";
+        }
+        var rowData = {
+          id_log_guru: "LOG-G-" + Date.now(),
+          tanggal: tglReq,
+          id_guru: userGuru.id_guru,
+          nama_guru: userGuru.nama_guru,
+          jam_masuk: modeReq === "Masuk" ? jamReq : "-",
+          status_masuk: modeReq === "Masuk" ? statusMasuk : "-",
+          jam_pulang: modeReq === "Pulang" ? jamReq : "-",
+          status_pulang: modeReq === "Pulang" ? "Tepat Waktu" : "-",
+          ket: "Auto Kiosk Scan"
+        };
+        upsertPresensiGuru(sheetPresensiGuru, rowData, tz);
+        return jsonResponse({
+          success: true,
+          role: "Guru",
+          kategori: "Guru",
+          name: userGuru.nama_guru,
+          status: modeReq === "Masuk" ? statusMasuk : "Tepat Waktu",
+          message: "Presensi Guru Berhasil: " + userGuru.nama_guru + " (" + (modeReq === "Masuk" ? statusMasuk : "Pulang") + ")",
+          data: { ...rowData, role: "Guru", kategori: "Guru", nama: userGuru.nama_guru, nama_guru: userGuru.nama_guru, jabatan_tugas: userGuru.jabatan_tugas }
+        });
+      } else {
+        return jsonResponse({ success: false, message: "ID atau Kode QR tidak ditemukan dalam DataSiswa maupun DataGuru!" });
+      }
+    }
+
     // 7. Backup & Restore Spreadsheet ke Google Drive
     if (action === "backupSpreadsheetToDrive" || action === "backupSpreadsheetGoogleDrive" || action === "duplikasiSpreadsheet") {
       var folderId = rawData.args && rawData.args[0] ? String(rawData.args[0]).trim() : (rawData.driveFolderId || "");
