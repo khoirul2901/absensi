@@ -3,7 +3,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches:
-      - main # Jalankan otomatis saat push ke branch 'main'
+      - main # Jalankan otomatis saat ada push ke branch 'main'
 
 permissions:
   contents: read
